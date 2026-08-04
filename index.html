@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JANコード読み取りテスト(静的版)</title>
+  <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 20px;
+      text-align: center;
+      margin: 8px 0 16px;
+    }
+    .buttons {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    button {
+      flex: 1;
+      padding: 14px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      cursor: pointer;
+    }
+    #startBtn { background: #2e7d32; }
+    #startBtn:disabled { background: #a5d6a7; cursor: default; }
+    #stopBtn { background: #c62828; }
+    #stopBtn:disabled { background: #ef9a9a; cursor: default; }
+
+    #videoWrap {
+      width: 100%;
+      aspect-ratio: 3 / 4;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #status {
+      min-height: 24px;
+      text-align: center;
+      font-size: 14px;
+      color: #555;
+      margin-bottom: 12px;
+    }
+    #status.error { color: #c62828; font-weight: bold; }
+
+    #resultBox {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+    #resultBox .label {
+      font-size: 13px;
+      color: #777;
+      margin-bottom: 8px;
+    }
+    #resultValue {
+      font-size: 32px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      word-break: break-all;
+      min-height: 40px;
+    }
+    #resultState {
+      margin-top: 8px;
+      font-size: 15px;
+      color: #2e7d32;
+      font-weight: bold;
+      min-height: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>JANコード読み取りテスト(静的版)</h1>
+
+  <div class="buttons">
+    <button id="startBtn">カメラを起動</button>
+    <button id="stopBtn" disabled>カメラを停止</button>
+  </div>
+
+  <div id="videoWrap">
+    <video id="video" playsinline muted></video>
+  </div>
+
+  <div id="status">カメラは停止中です</div>
+
+  <div id="resultBox">
+    <div class="label">読み取り結果</div>
+    <div id="resultValue">-</div>
+    <div id="resultState"></div>
+  </div>
+
+  <script>
+    var startBtn = document.getElementById('startBtn');
+    var stopBtn = document.getElementById('stopBtn');
+    var video = document.getElementById('video');
+    var statusEl = document.getElementById('status');
+    var resultValueEl = document.getElementById('resultValue');
+    var resultStateEl = document.getElementById('resultState');
+
+    var codeReader = null;
+    var scanning = false;
+    var lastErrorTime = 0;
+    var ERROR_DISPLAY_INTERVAL_MS = 3000; // throttle repeated decode-miss errors
+
+    function setStatus(message, isError) {
+      statusEl.textContent = message;
+      statusEl.className = isError ? 'error' : '';
+    }
+
+    function isSecureEnvironment() {
+      return window.isSecureContext === true;
+    }
+
+    function isValidJan(text) {
+      return /^\d{13}$/.test(text) || /^\d{8}$/.test(text);
+    }
+
+    function resetResult() {
+      resultValueEl.textContent = '-';
+      resultStateEl.textContent = '';
+    }
+
+    function showResult(text) {
+      resultValueEl.textContent = text;
+      resultStateEl.textContent = '読み取り成功';
+    }
+
+    // Maps a getUserMedia/ZXing error to a Japanese message. NotAllowedError
+    // can mean either the user declined the prompt or a Permissions Policy
+    // blocked the request outright (e.g. an embedding iframe) - this static
+    // page runs top-level, but the message stays neutral either way.
+    function classifyError(err) {
+      if (!err || !err.name) {
+        return '不明なエラーが発生しました。';
+      }
+      switch (err.name) {
+        case 'NotAllowedError':
+          return 'カメラの使用が許可されませんでした。ブラウザの設定を確認してください。';
+        case 'NotFoundError':
+          return '対応するカメラが見つかりませんでした。';
+        case 'NotReadableError':
+          return 'カメラを取得できませんでした。他のアプリがカメラを使用中の可能性があります。';
+        case 'OverconstrainedError':
+          return '指定したカメラの条件(背面カメラなど)を満たすカメラが見つかりませんでした。';
+        case 'SecurityError':
+          return 'セキュリティ設定によりカメラの使用が拒否されました。';
+        default:
+          return 'エラーが発生しました: ' + err.name + ' / ' + err.message;
+      }
+    }
+
+    function stopScanning(nextStatusMessage) {
+      scanning = false;
+      if (codeReader) {
+        try {
+          codeReader.reset();
+        } catch (e) {
+          // ignore reset errors on stop
+        }
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      if (nextStatusMessage) {
+        setStatus(nextStatusMessage);
+      }
+    }
+
+    function handleDecodeError(err) {
+      // ZXing throws a "not found" style exception on every frame with no
+      // barcode in view; that is normal and must not spam the UI.
+      var isNotFound = err && (err.name === 'NotFoundException' || err.name === 'ChecksumException' || err.name === 'FormatException');
+      if (isNotFound) {
+        return;
+      }
+      var now = Date.now();
+      if (now - lastErrorTime > ERROR_DISPLAY_INTERVAL_MS) {
+        lastErrorTime = now;
+        setStatus('読み取り中にエラーが発生しました: ' + (err && err.message ? err.message : err), true);
+      }
+    }
+
+    async function startScanning() {
+      resetResult();
+
+      if (typeof ZXing === 'undefined') {
+        setStatus('バーコード読み取りライブラリの読み込みに失敗しました。通信環境を確認してください。', true);
+        return;
+      }
+
+      if (!isSecureEnvironment()) {
+        setStatus('カメラを使用できない環境です。HTTPS接続で開いてください。', true);
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus('このブラウザではカメラを取得できません。', true);
+        return;
+      }
+
+      startBtn.disabled = true;
+      setStatus('カメラを起動しています…');
+
+      var hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.EAN_13,
+        ZXing.BarcodeFormat.EAN_8
+      ]);
+      codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+      var constraints = {
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      };
+
+      scanning = true;
+      lastErrorTime = 0;
+
+      try {
+        await codeReader.decodeFromConstraints(constraints, video, function (result, err) {
+          if (!scanning) {
+            return;
+          }
+          if (result) {
+            var text = result.getText();
+            if (isValidJan(text)) {
+              showResult(text);
+              setStatus('読み取りに成功しました。カメラを停止します。');
+              stopScanning();
+            }
+            // Non-numeric or wrong-length matches are ignored; scanning continues.
+            return;
+          }
+          if (err) {
+            handleDecodeError(err);
+          }
+        });
+        stopBtn.disabled = false;
+        setStatus('JANコードをカメラ中央に合わせてください');
+      } catch (err) {
+        scanning = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        setStatus(classifyError(err), true);
+      }
+    }
+
+    function manualStop() {
+      stopScanning('カメラを停止しました');
+    }
+
+    startBtn.addEventListener('click', startScanning);
+    stopBtn.addEventListener('click', manualStop);
+  </script>
+</body>
+</html>
