@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-xgLK1teHi9+kRNCsyBIoDS5+jWIs602M6g/QjBovkQY=' https://unpkg.com; style-src 'sha256-UfvpSBLgsLb2iesvd8BEJy55GkSoOdMwjl650Ax2LNI='; img-src 'self' data:; media-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
   <title>JANコード読み取りテスト(静的版)</title>
-  <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
+  <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" integrity="sha384-DOP3OlIzNeWpufSZMxZihUYSqCAZFirsVmSAVg8ItvU9ac1FcQF6ZHjQ9CbCznNS" crossorigin="anonymous"></script>
   <style>
     * { box-sizing: border-box; }
     body {

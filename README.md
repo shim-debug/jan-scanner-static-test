@@ -54,3 +54,11 @@ GitHub Pagesなど実際のHTTPS URLで行ってください。
 3. JANコードを画面中央に合わせる
 4. 読み取り成功で13桁/8桁の数字が大きく表示され、自動でカメラ停止
 5. 「カメラを起動」を再度押せば再読み取り可能
+
+## 公開ページの防御設定
+
+- CDNのZXingはバージョン固定に加えてSRIで取得ファイルの整合性を検証します。
+- CSPでスクリプトとスタイルを制限し、connect-srcをnoneに設定しています。
+- ライブラリ更新時はSRIを、インラインのJavaScript/CSS変更時はCSPのSHA-256を再計算してください。
+- Referrer Policyはno-referrerです。
+- GitHub Pagesで設定できない応答ヘッダーによる制限（frame-ancestors、Permissions-Policy等）は追加していません。
